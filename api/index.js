@@ -1,4 +1,4 @@
-// api/index.js - Main entry point for Vercel deployment
+// api/index.js - Fixed version with admin_and_employees support
 const express = require('express');
 const cors = require('cors');
 const admin = require('firebase-admin');
@@ -10,7 +10,6 @@ app.use(cors());
 app.use(express.json());
 
 // Initialize Firebase Admin SDK
-// You'll need to set your Firebase service account credentials as environment variables
 let firebaseApp;
 try {
   // Parse the service account key from environment variable
@@ -48,19 +47,86 @@ async function getStaffTokens() {
       .get();
 
     const tokens = [];
+    const userDetails = [];
+    
     staffQuery.forEach(doc => {
       const userData = doc.data();
-      if (userData.deviceToken) {
+      console.log(`👤 Found ${userData.role}: ${userData.name} (${userData.mobileNumber})`);
+      
+      if (userData.deviceToken && userData.deviceToken.trim() !== '') {
         tokens.push(userData.deviceToken);
-        console.log(`📱 Found token for ${userData.role}: ${userData.deviceToken.substring(0, 20)}...`);
+        userDetails.push(`${userData.role}: ${userData.name} (${userData.mobileNumber})`);
+        console.log(`📱 ✅ Added token for ${userData.role}: ${userData.deviceToken.substring(0, 20)}...`);
+      } else {
+        console.log(`📱 ❌ No device token for ${userData.role}: ${userData.name}`);
       }
     });
 
-    console.log(`✅ Found ${tokens.length} staff tokens`);
-    return tokens;
+    console.log(`✅ Found ${tokens.length} valid staff tokens out of ${staffQuery.docs.length} staff members`);
+    return { tokens, userDetails };
   } catch (error) {
     console.error('❌ Error fetching staff tokens:', error);
-    return [];
+    return { tokens: [], userDetails: [] };
+  }
+}
+
+// NEW: Get admin and employee tokens specifically
+async function getAdminAndEmployeeTokens() {
+  try {
+    console.log('🔍 Fetching admin and employee tokens from Firestore...');
+    
+    const tokens = [];
+    const userDetails = [];
+    
+    // Get admin users
+    console.log('📋 Searching for admin users...');
+    const adminQuery = await db.collection('users')
+      .where('role', '==', 'admin')
+      .get();
+    
+    console.log(`📋 Found ${adminQuery.docs.length} admin users`);
+    
+    adminQuery.forEach(doc => {
+      const userData = doc.data();
+      console.log(`👤 Admin: ${userData.name} (${userData.mobileNumber})`);
+      
+      if (userData.deviceToken && userData.deviceToken.trim() !== '') {
+        tokens.push(userData.deviceToken);
+        userDetails.push(`Admin: ${userData.name} (${userData.mobileNumber})`);
+        console.log(`📱 ✅ Added admin token: ${userData.deviceToken.substring(0, 20)}...`);
+      } else {
+        console.log(`📱 ❌ Admin ${userData.name} has no device token`);
+      }
+    });
+
+    // Get employee users
+    console.log('📋 Searching for employee users...');
+    const employeeQuery = await db.collection('users')
+      .where('role', '==', 'employee')
+      .get();
+    
+    console.log(`📋 Found ${employeeQuery.docs.length} employee users`);
+    
+    employeeQuery.forEach(doc => {
+      const userData = doc.data();
+      console.log(`👤 Employee: ${userData.name} (${userData.mobileNumber})`);
+      
+      if (userData.deviceToken && userData.deviceToken.trim() !== '') {
+        tokens.push(userData.deviceToken);
+        userDetails.push(`Employee: ${userData.name} (${userData.mobileNumber})`);
+        console.log(`📱 ✅ Added employee token: ${userData.deviceToken.substring(0, 20)}...`);
+      } else {
+        console.log(`📱 ❌ Employee ${userData.name} has no device token`);
+      }
+    });
+
+    console.log(`✅ Total admin/employee tokens collected: ${tokens.length}`);
+    console.log(`📋 Recipients: ${userDetails.join(', ')}`);
+    
+    return { tokens, userDetails, adminCount: adminQuery.docs.length, employeeCount: employeeQuery.docs.length };
+  } catch (error) {
+    console.error('❌ Error fetching admin/employee tokens:', error);
+    return { tokens: [], userDetails: [], adminCount: 0, employeeCount: 0 };
   }
 }
 
@@ -109,7 +175,7 @@ async function sendPushNotification(tokens, title, body, data = {}) {
 
     console.log(`📤 Sending notification to ${message.tokens.length} devices`);
     console.log(`📋 Title: ${title}`);
-    console.log(`📋 Body: ${body}`);
+    console.log(`📋 Body: ${body.substring(0, 100)}...`);
 
     const response = await admin.messaging().sendEachForMulticast(message);
     
@@ -156,7 +222,7 @@ app.post('/send-order-notification', async (req, res) => {
     }
 
     // Get all staff tokens
-    const staffTokens = await getStaffTokens();
+    const { tokens: staffTokens, userDetails } = await getStaffTokens();
     
     if (staffTokens.length === 0) {
       return res.status(404).json({
@@ -184,6 +250,7 @@ app.post('/send-order-notification', async (req, res) => {
       res.json({
         success: true,
         message: `Order notification sent to ${result.successCount} staff members`,
+        recipients: userDetails,
         details: result
       });
     } else {
@@ -325,10 +392,12 @@ app.post('/send-cancellation-notification', async (req, res) => {
   }
 });
 
-// 📢 Send custom notification (for admin use)
+// 📢 Send custom notification (FIXED to handle admin_and_employees)
 app.post('/send-custom-notification', async (req, res) => {
   try {
     console.log('🔔 Received custom notification request');
+    console.log('📋 Recipients type:', req.body.recipients);
+    console.log('📋 Title:', req.body.title);
     
     const { recipients, title, body, data } = req.body;
 
@@ -340,11 +409,31 @@ app.post('/send-custom-notification', async (req, res) => {
     }
 
     let tokens = [];
+    let userDetails = [];
+    let recipientInfo = {};
 
     // Handle different recipient types
-    if (recipients === 'all_staff') {
-      tokens = await getStaffTokens();
+    if (recipients === 'admin_and_employees') {
+      console.log('🎯 Getting admin and employee tokens...');
+      const result = await getAdminAndEmployeeTokens();
+      tokens = result.tokens;
+      userDetails = result.userDetails;
+      recipientInfo = {
+        type: 'admin_and_employees',
+        adminCount: result.adminCount,
+        employeeCount: result.employeeCount,
+        totalWithTokens: tokens.length
+      };
+      
+    } else if (recipients === 'all_staff') {
+      console.log('🎯 Getting all staff tokens...');
+      const result = await getStaffTokens();
+      tokens = result.tokens;
+      userDetails = result.userDetails;
+      recipientInfo = { type: 'all_staff', totalWithTokens: tokens.length };
+      
     } else if (recipients === 'all_customers') {
+      console.log('🎯 Getting all customer tokens...');
       // Get all customer tokens
       const customersQuery = await db.collection('users')
         .where('role', '==', 'customer')
@@ -354,20 +443,44 @@ app.post('/send-custom-notification', async (req, res) => {
         const userData = doc.data();
         if (userData.deviceToken) {
           tokens.push(userData.deviceToken);
+          userDetails.push(`Customer: ${userData.name} (${userData.mobileNumber})`);
         }
       });
+      recipientInfo = { type: 'all_customers', totalWithTokens: tokens.length };
+      
     } else if (Array.isArray(recipients)) {
+      console.log('🎯 Getting tokens for specific mobile numbers...');
       // Recipients is an array of mobile numbers
       for (const mobile of recipients) {
         const token = await getCustomerToken(mobile);
-        if (token) tokens.push(token);
+        if (token) {
+          tokens.push(token);
+          userDetails.push(`Mobile: ${mobile}`);
+        }
       }
+      recipientInfo = { type: 'specific_mobiles', totalWithTokens: tokens.length };
+      
+    } else if (typeof recipients === 'string' && recipients.length === 10) {
+      console.log('🎯 Getting token for single mobile number...');
+      // Single mobile number
+      const token = await getCustomerToken(recipients);
+      if (token) {
+        tokens.push(token);
+        userDetails.push(`Mobile: ${recipients}`);
+      }
+      recipientInfo = { type: 'single_mobile', totalWithTokens: tokens.length };
     }
+
+    console.log(`📊 Total tokens collected: ${tokens.length}`);
+    console.log(`📋 Recipients: ${userDetails.join(', ')}`);
 
     if (tokens.length === 0) {
       return res.status(404).json({
         success: false,
-        error: 'No valid recipients found'
+        error: 'No valid recipients found',
+        details: 'No users found with valid device tokens for the specified recipient type',
+        searchedFor: recipients,
+        recipientInfo: recipientInfo
       });
     }
 
@@ -377,7 +490,13 @@ app.post('/send-custom-notification', async (req, res) => {
       res.json({
         success: true,
         message: `Custom notification sent to ${result.successCount} recipients`,
-        details: result
+        recipients: userDetails,
+        recipientInfo: recipientInfo,
+        details: {
+          successCount: result.successCount,
+          failureCount: result.failureCount,
+          totalTokens: tokens.length
+        }
       });
     } else {
       res.status(500).json({
@@ -392,6 +511,62 @@ app.post('/send-custom-notification', async (req, res) => {
       success: false,
       error: 'Internal server error: ' + error.message
     });
+  }
+});
+
+// NEW: Debug endpoint to check admin/employee tokens
+app.get('/check-admin-employee-tokens', async (req, res) => {
+  try {
+    console.log('🔍 Checking admin and employee tokens...');
+    
+    const results = {
+      admins: [],
+      employees: [],
+      totalWithTokens: 0,
+      totalWithoutTokens: 0
+    };
+    
+    // Check admins
+    const adminQuery = await db.collection('users').where('role', '==', 'admin').get();
+    adminQuery.docs.forEach(doc => {
+      const data = doc.data();
+      const hasToken = data.deviceToken && data.deviceToken.trim() !== '';
+      
+      results.admins.push({
+        name: data.name,
+        mobile: data.mobileNumber,
+        hasToken: hasToken,
+        lastLogin: data.lastLoginAt?.toDate?.()?.toISOString() || 'Never'
+      });
+      
+      if (hasToken) results.totalWithTokens++;
+      else results.totalWithoutTokens++;
+    });
+    
+    // Check employees
+    const employeeQuery = await db.collection('users').where('role', '==', 'employee').get();
+    employeeQuery.docs.forEach(doc => {
+      const data = doc.data();
+      const hasToken = data.deviceToken && data.deviceToken.trim() !== '';
+      
+      results.employees.push({
+        name: data.name,
+        mobile: data.mobileNumber,
+        hasToken: hasToken,
+        lastLogin: data.lastLoginAt?.toDate?.()?.toISOString() || 'Never'
+      });
+      
+      if (hasToken) results.totalWithTokens++;
+      else results.totalWithoutTokens++;
+    });
+    
+    console.log(`📊 Token summary: ${results.totalWithTokens} with tokens, ${results.totalWithoutTokens} without`);
+    
+    res.json(results);
+    
+  } catch (error) {
+    console.error('❌ Error checking tokens:', error);
+    res.status(500).json({ error: error.message });
   }
 });
 
@@ -412,6 +587,7 @@ app.use('*', (req, res) => {
     availableEndpoints: [
       'GET /test',
       'GET /health',
+      'GET /check-admin-employee-tokens',
       'POST /send-order-notification',
       'POST /send-dispatch-notification',
       'POST /send-cancellation-notification',
