@@ -270,18 +270,19 @@ app.post('/send-order-notification', async (req, res) => {
 });
 
 // 🚚 Send dispatch notification to customer
-app.post('/send-dispatch-notification', async (req, res) => {
+// 🚚 Send enhanced dispatch notification with travel details to customer
+app.post('/send-dispatch-notification-with-details', async (req, res) => {
   try {
-    console.log('🔔 Received dispatch notification request');
+    console.log('🔔 Received enhanced dispatch notification request');
     console.log('📋 Request body:', req.body);
 
-    const { customerMobile, orderId, customerName } = req.body;
+    const { customerMobile, orderId, customerName, travelCompany, trackingNumber } = req.body;
 
     // Validate required fields
-    if (!customerMobile || !orderId) {
+    if (!customerMobile || !orderId || !travelCompany || !trackingNumber) {
       return res.status(400).json({
         success: false,
-        error: 'Missing required fields: customerMobile, orderId'
+        error: 'Missing required fields: customerMobile, orderId, travelCompany, trackingNumber'
       });
     }
 
@@ -289,32 +290,50 @@ app.post('/send-dispatch-notification', async (req, res) => {
     const customerToken = await getCustomerToken(customerMobile);
     
     if (!customerToken) {
+      console.log(`❌ No device token found for customer: ${customerMobile}`);
       return res.status(404).json({
         success: false,
-        error: 'Customer device token not found'
+        error: 'Customer device token not found',
+        details: `No valid device token found for mobile number: ${customerMobile}`
       });
     }
 
-    // Prepare notification content
-    const title = '🚚 Order Dispatched!';
-    const body = `Great news ${customerName || 'Customer'}! Your order #${orderId} has been dispatched and is on its way to you.`;
+    // Prepare enhanced notification content with travel details
+    const shortOrderId = orderId.substring(orderId.length - 8);
+    const title = '📦 Order Dispatched!';
+    const body = `Great news ${customerName || 'Customer'}! Your order #${shortOrderId} has been dispatched via ${travelCompany}.\n\nTracking Number: ${trackingNumber}\n\nYou can track your package using this number.`;
     
     const data = {
-      type: 'order_dispatched',
+      type: 'order_dispatched_with_details',
       orderId: orderId,
       customerMobile: customerMobile,
+      travelCompany: travelCompany,
+      trackingNumber: trackingNumber,
+      shortOrderId: shortOrderId,
     };
+
+    console.log(`📦 Sending enhanced dispatch notification:`);
+    console.log(`👤 Customer: ${customerName || 'Customer'} (${customerMobile})`);
+    console.log(`📋 Order: #${shortOrderId}`);
+    console.log(`🚚 Travel Company: ${travelCompany}`);
+    console.log(`📦 Tracking: ${trackingNumber}`);
 
     // Send notification
     const result = await sendPushNotification([customerToken], title, body, data);
 
     if (result.success) {
+      console.log('✅ Enhanced dispatch notification sent successfully');
       res.json({
         success: true,
-        message: 'Dispatch notification sent to customer',
+        message: `Enhanced dispatch notification sent to ${customerName || customerMobile}`,
+        travelDetails: {
+          company: travelCompany,
+          tracking: trackingNumber
+        },
         details: result
       });
     } else {
+      console.log('❌ Failed to send enhanced dispatch notification');
       res.status(500).json({
         success: false,
         error: result.error
@@ -322,7 +341,7 @@ app.post('/send-dispatch-notification', async (req, res) => {
     }
 
   } catch (error) {
-    console.error('❌ Error in send-dispatch-notification:', error);
+    console.error('❌ Error in send-dispatch-notification-with-details:', error);
     res.status(500).json({
       success: false,
       error: 'Internal server error: ' + error.message
