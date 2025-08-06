@@ -299,7 +299,7 @@ app.post('/send-dispatch-notification-with-details', async (req, res) => {
     }
 
     // Prepare enhanced notification content with travel details
-    const shortOrderId = orderId.substring(orderId.length - 8);
+    const shortOrderId = orderId;
     const title = '📦 Order Dispatched!';
     const body = `Great news ${customerName || 'Customer'}! Your order #${shortOrderId} has been dispatched via ${travelCompany}.\n\nTracking Number: ${trackingNumber}\n\nYou can track your package using this number.`;
     
@@ -636,4 +636,5 @@ if (require.main === module) {
     console.log(`🌐 Test endpoint: http://localhost:${PORT}/test`);
   });
 }
+
 
