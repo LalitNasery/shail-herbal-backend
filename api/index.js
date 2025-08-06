@@ -610,6 +610,7 @@ app.use('*', (req, res) => {
       'POST /send-order-notification',
       'POST /send-dispatch-notification',
       'POST /send-cancellation-notification',
+      'POST /send-dispatch-notification-with-details',
       'POST /send-custom-notification'
     ]
   });
@@ -635,3 +636,4 @@ if (require.main === module) {
     console.log(`🌐 Test endpoint: http://localhost:${PORT}/test`);
   });
 }
+
